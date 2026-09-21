@@ -84,6 +84,17 @@ class SimpleNet(nn.Module):
         ######## TODO ########
         # DO NOT change the code outside this part.
 
+        dims = [dim_in] + dim_hids + [dim_out]
+
+        self.layers = nn.ModuleList([
+            TimeLinear(
+                dims[i],
+                dims[i + 1],
+                num_timesteps
+            )
+            for i in range(len(dims) - 1)
+        ])
+
         ######################
 
     def forward(self, x: torch.Tensor, t: torch.Tensor):
@@ -98,5 +109,10 @@ class SimpleNet(nn.Module):
         ######## TODO ########
         # DO NOT change the code outside this part.
 
+        for layer in self.layers[:-1]:
+            x = F.relu(layer(x, t))
+
+        x = self.layers[-1](x, t)
+        
         ######################
         return x
