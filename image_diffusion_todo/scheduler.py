@@ -44,7 +44,27 @@ class BaseScheduler(nn.Module):
             #       beta_t = 1 - alphā_t / alphā_{t-1}
             # 3. Clip beta_t to at most 0.999 (singularity at t = T).
             # 4. Return betas as a tensor of shape [num_train_timesteps].
-            raise NotImplementedError("TODO: Implement cosine beta schedule here!")
+            s = 0.008
+
+            steps = torch.arange(
+                num_train_timesteps + 1,
+                dtype=torch.float32
+            )
+
+            f = torch.cos(
+                ((steps / num_train_timesteps + s) / (1 + s))
+                * torch.pi / 2
+            ) ** 2
+
+            alpha_bar = f / f[0]
+
+            betas = 1 - alpha_bar[1:] / alpha_bar[:-1]
+
+            betas = torch.clamp(
+                betas,
+                min=0.0,
+                max=0.999
+            )
                
         else:
             raise NotImplementedError(f"{mode} is not implemented.")
@@ -139,7 +159,77 @@ class DDPMScheduler(BaseScheduler):
         # 4. Compute the posterior variance \tilde{β}_t = ((1-ᾱ_{t-1})/(1-ᾱ_t)) * β_t.
         # 5. Add Gaussian noise scaled by √(\tilde{β}_t) unless t == 0.
         # 6. Return the final sample at t-1.
-        sample_prev = None
+        beta_t = extract(
+            self.betas, t, x_t
+        )
+
+        alpha_t = extract(
+            self.alphas, t, x_t
+        )
+
+        alpha_bar_t = extract(
+            self.alphas_cumprod, t, x_t
+        )
+
+        alphas_cumprod_prev = torch.cat([
+            torch.ones(
+                1,
+                device=self.alphas_cumprod.device,
+                dtype=self.alphas_cumprod.dtype
+            ),
+            self.alphas_cumprod[:-1]
+        ])
+
+        alpha_bar_prev = extract(
+            alphas_cumprod_prev,
+            t,
+            x_t
+        )
+
+        # 1. noise prediction -> x0 prediction
+        x0_pred = (
+            x_t
+            - torch.sqrt(1 - alpha_bar_t)
+            * eps_theta
+        ) / torch.sqrt(alpha_bar_t)
+
+        x0_pred = x0_pred.clamp(-1, 1)
+
+        # 2. true posterior mean
+        coef1 = (
+            torch.sqrt(alpha_bar_prev)
+            * beta_t
+            / (1 - alpha_bar_t)
+        )
+
+        coef2 = (
+            torch.sqrt(alpha_t)
+            * (1 - alpha_bar_prev)
+            / (1 - alpha_bar_t)
+        )
+
+        posterior_mean = (
+            coef1 * x0_pred
+            + coef2 * x_t
+        )
+
+        # t=0: don't add noise
+        if torch.all(t == 0):
+            return posterior_mean
+
+        # 3. posterior variance
+        posterior_var = (
+            (1 - alpha_bar_prev)
+            / (1 - alpha_bar_t)
+            * beta_t
+        )
+
+        noise = torch.randn_like(x_t)
+
+        sample_prev = (
+            posterior_mean
+            + torch.sqrt(posterior_var) * noise
+        )
         #######################
         return sample_prev
 
@@ -158,7 +248,68 @@ class DDPMScheduler(BaseScheduler):
         ######## TODO ########
         # Remember to clamp x0_pred to [-1, 1], as in step_predict_noise.
 
-        sample_prev = None
+        beta_t = extract(
+            self.betas, t, x_t
+        )
+
+        alpha_t = extract(
+            self.alphas, t, x_t
+        )
+
+        alpha_bar_t = extract(
+            self.alphas_cumprod, t, x_t
+        )
+
+        alphas_cumprod_prev = torch.cat([
+            torch.ones(
+                1,
+                device=self.alphas_cumprod.device,
+                dtype=self.alphas_cumprod.dtype
+            ),
+            self.alphas_cumprod[:-1]
+        ])
+
+        alpha_bar_prev = extract(
+            alphas_cumprod_prev,
+            t,
+            x_t
+        )
+
+        x0_pred = x0_pred.clamp(-1, 1)
+
+        coef1 = (
+            torch.sqrt(alpha_bar_prev)
+            * beta_t
+            / (1 - alpha_bar_t)
+        )
+
+        coef2 = (
+            torch.sqrt(alpha_t)
+            * (1 - alpha_bar_prev)
+            / (1 - alpha_bar_t)
+        )
+
+        posterior_mean = (
+            coef1 * x0_pred
+            + coef2 * x_t
+        )
+
+        if torch.all(t == 0):
+            return posterior_mean
+
+        posterior_var = (
+            (1 - alpha_bar_prev)
+            / (1 - alpha_bar_t)
+            * beta_t
+        )
+
+        noise = torch.randn_like(x_t)
+
+        sample_prev = (
+            posterior_mean
+            + torch.sqrt(posterior_var) * noise
+        )
+
         #######################
         return sample_prev
 
@@ -175,8 +326,21 @@ class DDPMScheduler(BaseScheduler):
             sample_prev: denoised image sample at timestep t-1
         """
         ######## TODO ########
+        if torch.all(t == 0):
+            return mean_theta
 
-        sample_prev = None
+        sigma_t = extract(
+            self.sigmas,
+            t,
+            x_t
+        )
+
+        noise = torch.randn_like(x_t)
+
+        sample_prev = (
+            mean_theta
+            + sigma_t * noise
+        )
         #######################
         return sample_prev
 
@@ -211,7 +375,16 @@ class DDPMScheduler(BaseScheduler):
         ######## TODO ########
         # DO NOT change the code outside this part.
         # Assignment 1. Implement the DDPM forward step.
-        x_t = None
+        alpha_bar_t = extract(
+            self.alphas_cumprod,
+            t,
+            x_0
+        )
+
+        x_t = (
+            torch.sqrt(alpha_bar_t) * x_0
+            + torch.sqrt(1 - alpha_bar_t) * eps
+        )
         #######################
 
         return x_t, eps

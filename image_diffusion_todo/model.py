@@ -29,7 +29,39 @@ class DiffusionModule(nn.Module):
         # 2. Pass (x_t, timestep) into self.network, where the output should represent the clean sample x0_pred.
         # 3. Compute the loss as MSE(predicted x0_pred, ground-truth x0).
         ######################
-        loss = None
+        B = x0.shape[0]
+
+        # 1. random timestep
+        t = self.var_scheduler.uniform_sample_t(
+            B,
+            x0.device
+        )
+
+        # 2. forward diffusion
+        x_t, eps = self.var_scheduler.add_noise(
+            x0,
+            t,
+            eps=noise
+        )
+
+        # 3. predict x0
+        if class_label is not None:
+            x0_pred = self.network(
+                x_t,
+                t,
+                class_label
+            )
+        else:
+            x0_pred = self.network(
+                x_t,
+                t
+            )
+
+        # 4. x0 matching loss
+        loss = F.mse_loss(
+            x0_pred,
+            x0
+        )
         return loss
 
     def get_loss_mean(self, x0, class_label=None, noise=None):
@@ -40,7 +72,90 @@ class DiffusionModule(nn.Module):
         # 3. Compute the *true* posterior mean from the closed-form DDPM formula (using x0, x_t, and scheduler terms).
         # 4. Compute the loss as MSE(predicted mean, true mean).
         ######################
-        loss = None
+        B = x0.shape[0]
+
+        # 1. sample timestep
+        t = self.var_scheduler.uniform_sample_t(
+            B,
+            x0.device
+        )
+
+        # 2. forward diffusion
+        x_t, eps = self.var_scheduler.add_noise(
+            x0,
+            t,
+            eps=noise
+        )
+
+        # 3. network predicts posterior mean
+        if class_label is not None:
+            mean_pred = self.network(
+                x_t,
+                t,
+                class_label
+            )
+        else:
+            mean_pred = self.network(
+                x_t,
+                t
+            )
+
+        beta_t = extract(
+            self.var_scheduler.betas,
+            t,
+            x_t
+        )
+
+        alpha_t = extract(
+            self.var_scheduler.alphas,
+            t,
+            x_t
+        )
+
+        alpha_bar_t = extract(
+            self.var_scheduler.alphas_cumprod,
+            t,
+            x_t
+        )
+
+        alphas_cumprod_prev = torch.cat([
+            torch.ones(
+                1,
+                device=self.var_scheduler.alphas_cumprod.device,
+                dtype=self.var_scheduler.alphas_cumprod.dtype
+            ),
+            self.var_scheduler.alphas_cumprod[:-1]
+        ])
+
+        alpha_bar_prev = extract(
+            alphas_cumprod_prev,
+            t,
+            x_t
+        )
+
+        # true posterior mean
+        coef1 = (
+            torch.sqrt(alpha_bar_prev)
+            * beta_t
+            / (1 - alpha_bar_t)
+        )
+
+        coef2 = (
+            torch.sqrt(alpha_t)
+            * (1 - alpha_bar_prev)
+            / (1 - alpha_bar_t)
+        )
+
+        true_mean = (
+            coef1 * x0
+            + coef2 * x_t
+        )
+
+        # 4. mean matching loss
+        loss = F.mse_loss(
+            mean_pred,
+            true_mean
+        )
         return loss
     
     def get_loss(self, x0, class_label=None, noise=None):
