@@ -576,6 +576,31 @@ def save_assignment_checkpoint(
     )
 
 
+def save_milestone_checkpoint(
+    run_dir,
+    step,
+    raw_network,
+    var_scheduler,
+    predictor,
+):
+    """
+    Save an assignment-compatible checkpoint for FID tuning.
+
+    Example:
+        step_5000.ckpt
+        step_10000.ckpt
+        ...
+    """
+    run_dir = Path(run_dir)
+
+    save_assignment_checkpoint(
+        run_dir / f"step_{step}.ckpt",
+        raw_network,
+        var_scheduler,
+        predictor,
+    )
+
+
 # ============================================================
 # Loss figure
 # ============================================================
@@ -1603,6 +1628,33 @@ def main(args):
             pbar.update(1)
 
         # ====================================================
+        # FID milestone checkpoint
+        # ====================================================
+
+        if (
+            args.milestone_interval > 0
+            and step % args.milestone_interval == 0
+        ):
+            barrier(distributed)
+
+            if is_main:
+                save_milestone_checkpoint(
+                    run_dir,
+                    step,
+                    raw_network,
+                    var_scheduler,
+                    args.predictor,
+                )
+
+                print(
+                    "\nFID milestone checkpoint saved "
+                    f"at step {step}: "
+                    f"{run_dir / f'step_{step}.ckpt'}"
+                )
+
+            barrier(distributed)
+
+        # ====================================================
         # Exact-resume checkpoint
         # ====================================================
 
@@ -1680,6 +1732,22 @@ def main(args):
 
                 args.predictor,
             )
+
+
+            # Also preserve the final model as a numbered
+            # assignment-compatible checkpoint for FID comparison.
+            final_milestone_path = (
+                run_dir / f"step_{step}.ckpt"
+            )
+
+            if not final_milestone_path.exists():
+                save_milestone_checkpoint(
+                    run_dir,
+                    step,
+                    raw_network,
+                    var_scheduler,
+                    args.predictor,
+                )
 
         barrier(distributed)
 
@@ -1869,6 +1937,17 @@ if __name__ == "__main__":
         help=(
             "Original-style image/trajectory logging interval. "
             "Use 0 to disable during correctness tests."
+        ),
+    )
+
+    parser.add_argument(
+        "--milestone_interval",
+        type=int,
+        default=0,
+        help=(
+            "Save numbered assignment-compatible checkpoints "
+            "(step_5000.ckpt, etc.) every N steps for FID tuning. "
+            "Use 0 to disable."
         ),
     )
 
