@@ -7,6 +7,10 @@ from model import DiffusionModule
 from scheduler import DDPMScheduler
 
 def main(args):
+    torch.manual_seed(63)
+    torch.cuda.manual_seed_all(63)
+    np.random.seed(63)
+    
     save_dir = Path(args.save_dir)
     save_dir.mkdir(exist_ok=True, parents=True)
 
